@@ -4,14 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MTC Anna Nagar — Attendance Register</title>
-<link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#123a32">
-<link rel="icon" href="icons/icon-192.png">
-<link rel="apple-touch-icon" href="icons/icon-192.png">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="MTC Attendance">
 <style>
   :root {
     --ink: #1c2b24;
@@ -131,8 +123,8 @@
   .cal-section-title .rule { flex: 1; height: 1px; background: var(--line); }
   .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-bottom: 26px; }
   .cal-cell { border-radius: 8px; padding: 8px 6px 7px; text-align: center; border: 1px solid transparent; min-height: 58px; display: flex; flex-direction: column; justify-content: center; position: relative; }
-  .cal-cell .date-lbl { font-family: var(--mono); font-size: 10px; opacity: 0.7; margin-bottom: 3px; }
-  .cal-cell .code { font-family: var(--mono); font-weight: 700; font-size: 14px; letter-spacing: 0.02em; }
+  .cal-cell .date-lbl { font-family: var(--mono); font-size: 12px; font-weight: 700; opacity: 0.85; margin-bottom: 3px; }
+  .cal-cell .code { font-family: var(--mono); font-weight: 700; font-size: 16px; letter-spacing: 0.02em; }
   .cal-cell.month-boundary { border-left: 2px dashed var(--accent); }
   .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-bottom: 6px; }
   .weekday-row div { text-align: center; font-family: var(--mono); font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.05em; }
@@ -159,6 +151,7 @@
     white-space: nowrap;
   }
   .report-btn:hover { background: var(--brand); color: #fff; }
+  .report-divider { border: 0; border-top: 2px solid var(--brand); opacity: .35; margin: 22px 0 20px; }
 
   .summary-grid {
     display: grid;
@@ -297,6 +290,9 @@
     .cal-grid { grid-template-columns: repeat(4, 1fr); }
     .weekday-row { display: none; }
     .emp-row .mini-stats { display: none; }
+    .cal-cell { padding: 4px 3px 4px; min-height: 44px; }
+    .cal-cell .date-lbl { font-size: 11px; margin-bottom: 2px; }
+    .cal-cell .code { font-size: 15px; }
 
     header { padding: 12px 14px 10px; }
     .eyebrow { font-size: 9px; margin-bottom: 2px; }
@@ -387,7 +383,7 @@ const MONTH_NAMES = ['January','February','March','April','May','June','July','A
 const CODE_MEANING = {
   PP: 'Present (Full)', OD: 'On Duty', WO: 'Weekly Off', OF: 'Present (Field/On Duty)',
   CL: 'Casual Leave', EL: 'Earned Leave', ML: 'Medical Leave', LP: 'Loss of Pay',
-  FP: 'Festival/Paid Holiday', FA: 'Failed to Attend / Absent', AB: 'Absent',
+  FP: 'Festival/Paid Holiday', FA: 'Festival Leave Availed', AB: 'Absent',
   CO: 'Compensatory Off', SO: 'Special Off', TR: 'Training', PM: 'Present (Half - Morning)',
   DD: 'Double Duty', MI: 'Missing/Muster Incomplete', PC: 'Paid Casual', S1: 'Special 1',
   BD: 'Break Duty', CD: 'Compensatory Duty', CR: 'Casual Rest', CT: 'Casual Training',
@@ -400,8 +396,8 @@ const CODE_MEANING = {
 function codeClass(code) {
   if (['PP','OD','PM','DD','CD','LD','EX','OF'].includes(code)) return 'present';
   if (['WO','SO','DO'].includes(code)) return 'off';
-  if (['CL','EL','ML','FP','PC','TR','S1','HO','PE'].includes(code)) return 'leave';
-  if (['FA','AB'].includes(code)) return 'absent';
+  if (['CL','EL','ML','FP','PC','TR','S1','HO','PE','FA'].includes(code)) return 'leave';
+  if (['AB'].includes(code)) return 'absent';
   return 'other';
 }
 
@@ -614,7 +610,9 @@ function loadStore() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed || !Array.isArray(parsed.datasets) || parsed.datasets.length === 0) return null;
+    if (!parsed) return null;
+    if (parsed.cleared) return parsed; // explicit "Clear saved months" marker (has no datasets on purpose)
+    if (!Array.isArray(parsed.datasets) || parsed.datasets.length === 0) return null;
     return parsed;
   } catch (e) {
     return null;
@@ -869,24 +867,48 @@ function computeReportD(employees) {
 
 // ---- Report A: configurable LP/MI/AB day-count threshold ----
 let reportAThresholds = { MI: '', LP: '', AB: '' };
+let reportAMode = 'exact'; // 'exact' (= X days) or 'atleast' (X or more days) — applies to all inputs
+let reportASearch = '';    // free-text code search, e.g. "xx or X1Y or ZZ or 5 WW or a1"
+
+// Parses the free-text search into terms. Terms are separated by "or" (any case).
+// A term is either a plain code ("ZZ" = has this code at least once) or a count + code
+// ("5 WW" = 5 days of WW, following the Exact days / More days choice).
+function parseReportASearch(text) {
+  return String(text || '')
+    .split(/\s+or\s+/i)
+    .map(t => t.trim())
+    .filter(Boolean)
+    .map(t => {
+      const m = t.match(/^(\d+)\s+(\S+)$/);
+      return m ? { code: m[2].toUpperCase(), count: parseInt(m[1], 10) } : { code: t.toUpperCase(), count: null };
+    });
+}
 
 function computeReportA(employees) {
   const flat = [];
   // Only codes with a value actually entered are checked — empty box = no criteria for that code.
   const active = ['MI','LP','AB'].filter(code => reportAThresholds[code] !== '' && !isNaN(reportAThresholds[code]));
-  if (active.length === 0) return flat;
+  const terms = parseReportASearch(reportASearch);
+  if (active.length === 0 && terms.length === 0) return flat;
   employees.forEach(e => {
-    const counts = { MI: 0, LP: 0, AB: 0 };
-    e.codes.forEach(c => { if (c in counts) counts[c]++; });
-    let flagged = false;
+    const all = {};
+    e.codes.forEach(c => { all[c] = (all[c] || 0) + 1; });
+    const counts = { MI: all.MI || 0, LP: all.LP || 0, AB: all.AB || 0 };
     const reasons = [];
     active.forEach(code => {
       const th = Number(reportAThresholds[code]);
-      if (counts[code] === th) { flagged = true; reasons.push(`${code} ${counts[code]} days`); }
+      const matches = reportAMode === 'atleast' ? (counts[code] >= th) : (counts[code] === th);
+      if (matches) reasons.push(`${code} ${counts[code]} days`);
     });
-    if (flagged) flat.push({ emp: e, counts, reason: reasons.join('; ') });
+    terms.forEach(t => {
+      const n = all[t.code] || 0;
+      const matches = t.count === null ? n >= 1
+        : (reportAMode === 'atleast' ? n >= t.count : n === t.count);
+      if (matches) reasons.push(`${t.code} ${n} days`);
+    });
+    const uniq = [...new Set(reasons)];
+    if (uniq.length > 0) flat.push({ emp: e, counts, reason: uniq.join('; ') });
   });
-  flat.sort((a,b) => (b.counts.MI+b.counts.LP+b.counts.AB) - (a.counts.MI+a.counts.LP+a.counts.AB));
   return flat;
 }
 
@@ -950,6 +972,17 @@ function computeReportC(employees, dayLabels) {
 }
 
 // ---- XLS export (each report downloads independently as a .xls file) ----
+// Compares employee numbers like "A23627" ascending by letter-prefix then numeric part.
+function compareStaffno(a, b) {
+  const ma = String(a).match(/^([A-Za-z]*)(\d+)/);
+  const mb = String(b).match(/^([A-Za-z]*)(\d+)/);
+  if (ma && mb) {
+    if (ma[1] !== mb[1]) return ma[1].localeCompare(mb[1]);
+    return parseInt(ma[2], 10) - parseInt(mb[2], 10);
+  }
+  return String(a).localeCompare(String(b));
+}
+
 // Groups the report's flat items by employee section, ascending, for the export table
 // (mirrors the on-screen grouping in renderCatBreakdown).
 function groupBySectionAscending(flatItems) {
@@ -963,6 +996,7 @@ function groupBySectionAscending(flatItems) {
     if (!isNaN(na) && !isNaN(nb)) return na - nb;
     return a.localeCompare(b);
   });
+  sections.forEach(sec => bySection[sec].sort((x, y) => compareStaffno(x.emp.staffno, y.emp.staffno)));
   return { bySection, sections };
 }
 
@@ -974,8 +1008,10 @@ function getReportData(letter) {
 
   if (letter === 'A') {
     title = 'REPORT A-1: LEAVE';
-    const fmt = (v) => v === '' ? 'not set' : ('= ' + v + ' days');
+    const cmp = reportAMode === 'atleast' ? '>= ' : '= ';
+    const fmt = (v) => v === '' ? 'not set' : (cmp + v + ' days');
     subtitle = 'MI ' + fmt(reportAThresholds.MI) + ', LP ' + fmt(reportAThresholds.LP) + ', AB ' + fmt(reportAThresholds.AB);
+    if (reportASearch) subtitle += ', Code search: ' + reportASearch + (reportAMode === 'atleast' ? ' (counts: N or more days)' : ' (counts: exact days)');
     flat = computeReportA(employees);
     rowDetail = (item) => item.reason;
   } else if (letter === 'A2') {
@@ -1211,6 +1247,8 @@ function renderCatBreakdown(containerId, flatItems, rowRenderer) {
     if (!isNaN(na) && !isNaN(nb)) return na - nb;
     return a.localeCompare(b);
   });
+  // Employee numbers ascending within each section.
+  sections.forEach(sec => bySection[sec].sort((a, b) => compareStaffno(a.emp.staffno, b.emp.staffno)));
   let html = '';
   let total = 0;
   sections.forEach(sec => {
@@ -1267,16 +1305,23 @@ function renderSummary() {
     </div>`;
   const { html: repAHtml, total: repATotal } = renderCatBreakdown('A', repA, rowA);
 
-  const noThresholdSet = reportAThresholds.MI === '' && reportAThresholds.LP === '' && reportAThresholds.AB === '';
+  const noThresholdSet = reportAThresholds.MI === '' && reportAThresholds.LP === '' && reportAThresholds.AB === '' && parseReportASearch(reportASearch).length === 0;
   const reportAHtml = `<div class="report-block">
     <div class="report-heading">Report A-1 — Leave</div>
+    <div class="report-controls" style="margin-bottom:8px;display:flex;flex-wrap:nowrap;align-items:center;gap:8px 12px;">
+      <label class="report-field" style="font-weight:400;white-space:nowrap;flex:0 0 auto;"><input type="radio" name="reportAMode" value="exact" ${reportAMode==='exact'?'checked':''} style="width:auto;margin-right:4px;"> Exact days</label>
+      <label class="report-field" style="font-weight:400;white-space:nowrap;flex:0 0 auto;"><input type="radio" name="reportAMode" value="atleast" ${reportAMode==='atleast'?'checked':''} style="width:auto;margin-right:4px;"> More days</label>
+      <label class="report-field" style="display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;">Code search
+        <input type="text" id="reportASearchInput" value="${escapeXml(reportASearch)}" placeholder="e.g. xx or X1Y or ZZ or 5 WW or a1" autocomplete="off" style="flex:1 1 auto;min-width:40px;width:0;box-sizing:border-box;">
+      </label>
+    </div>
     <div class="report-controls">
       <label class="report-field">MI <input type="number" min="0" max="999" maxlength="3" id="thMI" value="${reportAThresholds.MI}" placeholder="days" oninput="if(this.value.length>3)this.value=this.value.slice(0,3);"></label>
       <label class="report-field">LP <input type="number" min="0" max="999" maxlength="3" id="thLP" value="${reportAThresholds.LP}" placeholder="days" oninput="if(this.value.length>3)this.value=this.value.slice(0,3);"></label>
       <label class="report-field">AB <input type="number" min="0" max="999" maxlength="3" id="thAB" value="${reportAThresholds.AB}" placeholder="days" oninput="if(this.value.length>3)this.value=this.value.slice(0,3);"></label>
       <button class="report-btn" id="reportAApplyBtn">Apply</button>
     </div>
-    ${noThresholdSet ? '<div class="report-sub" style="margin:8px 0;">Enter an exact number of days in MI, LP, and/or AB above, then tap Apply.</div>' : ''}
+    ${noThresholdSet ? `<div class="report-sub" style="margin:8px 0;">Enter days in MI, LP, and/or AB, or type codes in Code search (separate with "or"; use "5 WW" for a day count), choose Exact or More days, then tap Apply.</div>` : ''}
     <div class="flag-banner" id="flagBannerA" style="${repATotal===0?'cursor:default;':''}">
       <div class="flag-title">Employee (Total)</div>
       <div class="flag-count">${repATotal}</div>
@@ -1284,6 +1329,7 @@ function renderSummary() {
     <div class="report-sub" style="margin: 6px 0 8px;">(Breakups)</div>
     <div id="flagBreakdownA">${repAHtml}</div>
     <button class="report-btn" id="printReportABtn" style="margin-top:12px;">Download Report A-1 as XLSX</button>
+    <hr class="report-divider">
   </div>`;
 
   // Report A-2 — Absent employees on one selected date
@@ -1312,6 +1358,7 @@ function renderSummary() {
     <div class="report-sub" style="margin: 6px 0 8px;">(Breakups)</div>
     <div id="flagBreakdownA2">${repA2Html}</div>
     <button class="report-btn" id="printReportA2Btn" style="margin-top:12px;">Download Report A-2 as XLSX</button>
+    <hr class="report-divider">
   </div>`;
 
   // Report B — Weekoff - Absent
@@ -1336,6 +1383,7 @@ function renderSummary() {
     <div class="report-sub" style="margin: 6px 0 8px;">(Breakups)</div>
     <div id="flagBreakdownB">${repBHtml}</div>
     <button class="report-btn" id="printReportBBtn" style="margin-top:12px;">Download Report B as XLSX</button>
+    <hr class="report-divider">
   </div>`;
 
   // Report C — State Holiday - Absent
@@ -1365,6 +1413,7 @@ function renderSummary() {
     <div class="report-sub" style="margin: 6px 0 8px;">(Breakups)</div>
     <div id="flagBreakdownC">${repCHtml}</div>
     <button class="report-btn" id="printReportCBtn" style="margin-top:12px;">Download Report C as XLSX</button>
+    <hr class="report-divider">
   </div>`;
 
   // Report D — Check the Entry (codes not found in the duty-code master, attcode.dbf)
@@ -1391,6 +1440,7 @@ function renderSummary() {
     <div class="report-sub" style="margin: 6px 0 8px;">(Breakups)</div>
     <div id="flagBreakdownD">${repDHtml}</div>
     <button class="report-btn" id="printReportDBtn" style="margin-top:12px;" ${!validDutyCodes ? 'disabled' : ''}>Download Report D as XLSX</button>
+    <hr class="report-divider">
   </div>`;
 
   const totalEmployees = employees.length;
@@ -1423,7 +1473,12 @@ function renderSummary() {
       v = Math.max(0, Math.min(999, v));
       reportAThresholds[code] = v;
     });
+    reportAMode = mainEl.querySelector('input[name="reportAMode"]:checked').value;
+    reportASearch = document.getElementById('reportASearchInput').value.trim();
     renderSummary();
+  });
+  document.getElementById('reportASearchInput').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') document.getElementById('reportAApplyBtn').click();
   });
 
   document.getElementById('reportA2ApplyBtn').addEventListener('click', () => {
@@ -1534,7 +1589,7 @@ function renderList() {
     const stats = computeStats(e.codes);
     const present = (stats.PP||0)+(stats.DR||0)+(stats.OD||0)+(stats.PM||0)+(stats.OF||0); // PP, DR, OD, PM, OF all counted as Present
     const leave = (stats.CL||0)+(stats.EL||0)+(stats.ML||0);
-    const absent = (stats.FA||0)+(stats.AB||0);
+    const absent = (stats.AB||0); // FA (Festival Leave Availed) is not counted as absent
     const wo = computeWeeklyOff(e, dayLabels);
     html += `<div class="emp-row" data-idx="${employees.indexOf(e)}">
       <div class="id-block">
@@ -1567,7 +1622,7 @@ function renderDetail(emp) {
   const present = (stats.PP||0)+(stats.DR||0)+(stats.OD||0)+(stats.PM||0)+(stats.OF||0); // PP, DR, OD, PM, OF all counted as Present
   const leave = (stats.CL||0)+(stats.EL||0)+(stats.ML||0);
   const weeklyOff = (stats.WO||0);
-  const absent = (stats.FA||0)+(stats.AB||0);
+  const absent = (stats.AB||0); // FA (Festival Leave Availed) is not counted as absent
   const wo = computeWeeklyOff(emp, dayLabels);
 
   let html = `<button class="back-link" id="backBtn">← Back to results</button>
@@ -1600,11 +1655,6 @@ function renderDetail(emp) {
 
     <div class="cal-section-title"><span>Duty Calendar · ${periods[activeKey].rangeLabel}</span><span class="rule"></span></div>
     ${renderCalendar(emp)}
-
-    <div class="legend">
-      <div class="legend-title">Legend</div>
-      <div class="legend-items">${renderLegend(emp)}</div>
-    </div>
   </div>`;
 
   mainEl.innerHTML = html;
@@ -1631,15 +1681,6 @@ function renderCalendar(emp) {
   });
   html += '</div>';
   return html;
-}
-
-function renderLegend(emp) {
-  const used = [...new Set(emp.codes)].sort();
-  return used.map(code => {
-    const cls = codeClass(code);
-    const style = CLASS_STYLE[cls];
-    return `<div class="legend-item"><span class="legend-swatch" style="background:${style.bg}; border:1px solid ${style.fg}"></span>${code} — ${CODE_MEANING[code] || 'Unknown'}</div>`;
-  }).join('');
 }
 
 function showImportMsg(text, ok) {
@@ -1727,13 +1768,6 @@ refreshPeriodSelect();
 refreshSectionFilter();
 updateHeaderLine();
 renderList();
-</script>
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('service-worker.js').catch(() => {});
-  });
-}
 </script>
 </body>
 </html>
