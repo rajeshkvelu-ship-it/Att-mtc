@@ -1,17 +1,16 @@
 {
-  "name": "MTC Attendance Register",
+  "name": "MTC Anna Nagar Attendance Register",
   "short_name": "MTC Attendance",
-  "description": "Employee attendance calendar viewer for MTC Anna Nagar branch",
-  "start_url": "./index.html",
+  "description": "MTC Anna Nagar Attendance Register",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "orientation": "portrait-primary",
-  "background_color": "#f6f4ee",
-  "theme_color": "#123a32",
-  "icons": [
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  "background_color": "#ffffff",
+  "theme_color": "#0d6efd",
+  "orientation": "portrait",
+  "lang": "en-IN",
+  "categories": [
+    "productivity",
+    "business"
   ]
 }
